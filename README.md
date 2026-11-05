@@ -28,6 +28,8 @@ The permutation test exchanges group labels between raters with the images and t
 
 The data are not included yet. See [data/README.md](data/README.md).
 
+Image features are not released, so the code uses the released per-image model predictions. Three values cannot be recomputed from the released data and are read from a fixed file: the own-group model comparison, the transfer loss, and the model gap interval. Model training itself cannot be rerun.
+
 ```
 pip install -r requirements.txt
 python analysis/reproduce.py          # full run, several minutes or more
