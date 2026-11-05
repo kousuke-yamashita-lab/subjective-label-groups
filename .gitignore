@@ -1,0 +1,7 @@
+# Anonymised data stay out of version control until their release is confirmed.
+data/*
+!data/README.md
+results/
+__pycache__/
+*.pyc
+.venv/
