@@ -4,6 +4,7 @@
 Usage: python analysis/reproduce.py [--quick]
 """
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -61,6 +62,38 @@ def interval(obs, draws):
     return obs + lo - x.mean(), obs + hi - x.mean()
 
 
+def model_interval(D, z, alpha, N_MODEL):
+    # Model gap interval: raters and images, plus raters and images of the training data, with the penalty fixed.
+    from sklearn.linear_model import Ridge
+    t, _ = M.load_training("siglip2_base")
+    tpos = {i: k for k, i in enumerate(z["train_image_ids"])}
+    forms = {f: g.pivot(index="rater_id", columns="image_id", values="overall") for f, g in t.groupby("form_id")}
+    rng = np.random.default_rng(101)
+    gaps = []
+    for _ in range(N_MODEL):
+        Xs, ys = [], []
+        for F in forms.values():
+            A = F.to_numpy(float); ids = F.columns.to_numpy()
+            r = rng.integers(0, A.shape[0], A.shape[0]); c = rng.integers(0, A.shape[1], A.shape[1])
+            A = A[r][:, c]
+            v = np.nanmean(A - np.nanmean(A, 1, keepdims=True), 0); v = v - np.nanmean(v)
+            ok = ~np.isnan(v)
+            Xs.append(z["train_X"][[tpos[i] for i in ids[c][ok]]]); ys.append(v[ok])
+        m = Ridge(alpha=alpha).fit(np.concatenate(Xs).astype(float), np.concatenate(ys))
+        pb = dict(zip(z["image_ids"], m.predict(z["X"].astype(float))))
+        with np.errstate(all="ignore"):
+            De = {}
+            for s in S:
+                k = []
+                for j in (True, False):
+                    w = np.where(D[s]["jp"] == j)[0]
+                    k += list(rng.choice(w, max(len(w) // 2, 2), replace=False))
+                k = np.array(k); c = rng.choice(10, 10)
+                De[s] = {"mats": {"overall": D[s]["mats"]["overall"][k][:, c]}, "jp": D[s]["jp"][k], "imgs": [D[s]["imgs"][i] for i in c]}
+            gaps.append(M.corrected_fit(De, pb, S, True) - M.corrected_fit(De, pb, S, False))
+    return np.nanpercentile(gaps, [2.5, 97.5])
+
+
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--quick", action="store_true")
     q = ap.parse_args().quick
@@ -69,10 +102,16 @@ def main():
     D = M.load_ratings()
     persons, pid, base = person_index(D)
     cst = strata(pid, base)
-    pred, alpha = M.fit_transfer_model("siglip2_base")
-    _, z = M.load_training("siglip2_base")
-    pos = {i: k for k, i in enumerate(z["image_ids"])}
-    fast = M.LeaveOneSetOutRidge({s: z["X"][[pos[i] for i in D[s]["imgs"]]] for s in S})
+    # Image features are not released. Without them, the released predictions and fixed results are used.
+    use_features = M.has_features()
+    fixed = json.load(open(M.DATA / "precomputed_model_results.json", encoding="utf-8"))
+    if use_features:
+        pred, alpha = M.fit_transfer_model("siglip2_base")
+        _, z = M.load_training("siglip2_base")
+        pos = {i: k for k, i in enumerate(z["image_ids"])}
+        fast = M.LeaveOneSetOutRidge({s: z["X"][[pos[i] for i in D[s]["imgs"]]] for s in S})
+    else:
+        pred, alpha, z, fast = M.load_predictions()["siglip2_base"], None, None, None
 
     p1 = lambda d, sets=S: M.icc(d, sets, True) - M.icc(d, sets, False)
     p2 = lambda d, sets=S: M.element_correlation(d, sets, True) - M.element_correlation(d, sets, False)
@@ -82,11 +121,15 @@ def main():
     extra = ["own-group model", "transfer loss"]
     names = list(simple) + extra
     obs = {k: f(D) for k, f in simple.items()}
-    obs[extra[0]], obs[extra[1]] = M.same_group_vs_transfer(D, fast)
+    if use_features:
+        obs[extra[0]], obs[extra[1]] = M.same_group_vs_transfer(D, fast)
+    else:
+        obs[extra[0]], obs[extra[1]] = fixed["own_group_model"]["observed"], fixed["transfer_loss"]["observed"]
 
     # Permutation test: country labels are exchanged between raters, with images and the trained model held fixed.
     rng = np.random.default_rng(11)
     cnt = dict.fromkeys(names, 0); tot = dict.fromkeys(names, 0)
+    permuted = names if use_features else list(simple)
     for _ in range(N_PERM):
         flag = np.zeros(len(persons), bool); flag[rng.choice(len(persons), base.sum(), replace=False)] = True
         Dp = relabel(D, pid, flag)
@@ -94,11 +137,15 @@ def main():
         for k, f in simple.items():
             with np.errstate(all="ignore"):
                 vals[k] = f(Dp)
-        vals[extra[0]], vals[extra[1]] = M.same_group_vs_transfer(Dp, fast)
+        if use_features:
+            vals[extra[0]], vals[extra[1]] = M.same_group_vs_transfer(Dp, fast)
         for k, v in vals.items():
             if not np.isnan(v):
                 tot[k] += 1; cnt[k] += (v >= obs[k]) if k == "1-rho*" else (abs(v) >= abs(obs[k]))
-    adj = dict(zip(names, M.holm([(cnt[k] + 1) / (tot[k] + 1) for k in names])))
+    raw = {k: (cnt[k] + 1) / (tot[k] + 1) for k in permuted}
+    if not use_features:
+        raw[extra[0]], raw[extra[1]] = fixed["own_group_model"]["raw_p"], fixed["transfer_loss"]["raw_p"]
+    adj = dict(zip(names, M.holm([raw[k] for k in names])))
 
     # Half-sampling of raters and resampling of images.
     prior = pd.read_csv(M.DATA / "selection_scores.csv").set_index("image_id").selection_score
@@ -135,44 +182,17 @@ def main():
         with np.errstate(all="ignore"):
             fH.append(p2(Db)); fHr.append(p3(Db)); fR.append(p1(Db))
 
-    # Model gap interval: raters and images, plus raters and images of the training data, with the penalty fixed.
-    from sklearn.linear_model import Ridge
-    t, _ = M.load_training("siglip2_base")
-    tpos = {i: k for k, i in enumerate(z["train_image_ids"])}
-    forms = {f: g.pivot(index="rater_id", columns="image_id", values="overall") for f, g in t.groupby("form_id")}
-    rng = np.random.default_rng(101)
-    gaps = []
-    for _ in range(N_MODEL):
-        Xs, ys = [], []
-        for F in forms.values():
-            A = F.to_numpy(float); ids = F.columns.to_numpy()
-            r = rng.integers(0, A.shape[0], A.shape[0]); c = rng.integers(0, A.shape[1], A.shape[1])
-            A = A[r][:, c]
-            v = np.nanmean(A - np.nanmean(A, 1, keepdims=True), 0); v = v - np.nanmean(v)
-            ok = ~np.isnan(v)
-            Xs.append(z["train_X"][[tpos[i] for i in ids[c][ok]]]); ys.append(v[ok])
-        m = Ridge(alpha=alpha).fit(np.concatenate(Xs).astype(float), np.concatenate(ys))
-        pb = dict(zip(z["image_ids"], m.predict(z["X"].astype(float))))
-        with np.errstate(all="ignore"):
-            De = {}
-            for s in S:
-                k = []
-                for j in (True, False):
-                    w = np.where(D[s]["jp"] == j)[0]
-                    k += list(rng.choice(w, max(len(w) // 2, 2), replace=False))
-                k = np.array(k); c = rng.choice(10, 10)
-                De[s] = {"mats": {"overall": D[s]["mats"]["overall"][k][:, c]}, "jp": D[s]["jp"][k], "imgs": [D[s]["imgs"][i] for i in c]}
-            gaps.append(M.corrected_fit(De, pb, S, True) - M.corrected_fit(De, pb, S, False))
+    interval_model = tuple(model_interval(D, z, alpha, N_MODEL)) if use_features else tuple(fixed["model_gap_interval"])
 
     # Tables
     rs, rj, rv = M.between_group_parts(D)
-    L = ["# Reproduced results", "", f"Permutations {N_PERM}, half-samples {N_HALF}, model resamples {N_MODEL}.", "",
+    L = ["# Reproduced results", "", f"Permutations {N_PERM}, half-samples {N_HALF}. Image features: {'used' if use_features else 'not available; model training results are fixed values'}.", "",
          "| Measure | Japanese | Vietnamese | Holm p | 95% interval of the difference |", "|---|---|---|---|---|",
          f"| Agreement rho | {M.icc(D,S,True):.3f} | {M.icc(D,S,False):.3f} | {adj['rho']:.4f} | [{ci['rho_diff'][0]:+.3f}, {ci['rho_diff'][1]:+.3f}] |",
          f"| H | {M.element_correlation(D,S,True):.3f} | {M.element_correlation(D,S,False):.3f} | {adj['H']:.4f} | [{ci['H_diff'][0]:+.3f}, {ci['H_diff'][1]:+.3f}] |",
          f"| H_res | {M.element_correlation(D,S,True,True):.3f} | {M.element_correlation(D,S,False,True):.3f} | {adj['H_res']:.4f} | [{ci['H_res_diff'][0]:+.3f}, {ci['H_res_diff'][1]:+.3f}] |",
          f"| rho* (value and interval; p against 1) | {M.rho_star(D):.3f} | | {adj['1-rho*']:.4f} | [{ci['rho_star'][0]:+.3f}, {ci['rho_star'][1]:+.3f}] |",
-         f"| Model fit | {M.corrected_fit(D,pred,S,True):.3f} | {M.corrected_fit(D,pred,S,False):.3f} | {adj['model']:.4f} | [{np.nanpercentile(gaps,2.5):+.3f}, {np.nanpercentile(gaps,97.5):+.3f}] |", "",
+         f"| Model fit | {M.corrected_fit(D,pred,S,True):.3f} | {M.corrected_fit(D,pred,S,False):.3f} | {adj['model']:.4f} | [{interval_model[0]:+.3f}, {interval_model[1]:+.3f}] |", "",
          "## All nine comparisons", "", "| Comparison | Observed | Holm p |", "|---|---|---|"]
     L += [f"| {k} | {obs[k]:+.3f} | {adj[k]:.4f} |" for k in names]
     L += ["", "## Details", "",
@@ -187,7 +207,7 @@ def main():
           f"  - rho {M.icc(flat,S,True):.3f} / {M.icc(flat,S,False):.3f}, difference {p1(flat):+.3f} [{interval(p1(flat),fR)[0]:+.3f}, {interval(p1(flat),fR)[1]:+.3f}]", "",
           "## Other image features (difference in corrected rank correlation)", ""]
     for f in M.FEATURES:
-        pr, _ = M.fit_transfer_model(f)
+        pr = M.fit_transfer_model(f)[0] if use_features else M.load_predictions()[f]
         a, b = M.corrected_fit(D, pr, S, True), M.corrected_fit(D, pr, S, False)
         L.append(f"- {f}: {a:.3f} / {b:.3f}, {a-b:+.3f}")
     L += ["", "## By set", "", "| Set | JP raters | VN raters | rho difference | H difference |", "|---|---|---|---|---|"]

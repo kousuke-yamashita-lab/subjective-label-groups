@@ -7,6 +7,7 @@ from scipy import stats
 from sklearn.linear_model import RidgeCV
 
 DATA = Path(__file__).resolve().parents[1] / "data"
+PRIVATE = DATA / "private"     # image features are not released
 ELEMENTS = ["color", "pattern", "silhouette", "material", "accessory", "styling"]
 SETS = ["S1", "S2", "S3", "S4", "S5", "S6"]
 BLUE, GENERAL = SETS[:3], SETS[3:]
@@ -120,8 +121,18 @@ def accessory_weight_gap(D, sets=SETS):
 
 def load_training(feature):
     t = pd.read_csv(DATA / "train_ratings.csv")
-    z = np.load(DATA / f"features_{feature}.npz", allow_pickle=True)
+    z = np.load(PRIVATE / f"features_{feature}.npz", allow_pickle=True)
     return t, z
+
+
+def has_features():
+    return (PRIVATE / "features_siglip2_base.npz").exists()
+
+
+def load_predictions():
+    """Released per-image predictions of the transfer model, one column per image feature."""
+    df = pd.read_csv(DATA / "model_predictions.csv").set_index("image_id")
+    return {f: df[f].to_dict() for f in FEATURES}
 
 
 def training_target(t):
