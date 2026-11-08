@@ -9,3 +9,7 @@ Survey images and image features are not distributed. The survey images were col
 | `train_ratings.csv` | The separate Japanese ratings used to train the transfer model: `rater_id`, `form_id`, `image_id`, `overall` |
 | `model_predictions.csv` | Per-image predictions of the transfer model, one column per image feature (`siglip2_base`, `siglip_so400m`, `clip_l14`, `fashion_clip`, `vit_in21k`) |
 | `precomputed_model_results.json` | Results that need the image features, fixed from a single full run: the two leave-one-set-out comparisons and the model gap interval |
+
+## License
+
+The files in this directory are released under the [Creative Commons Attribution 4.0 International License (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/). Please cite the paper when using them.
