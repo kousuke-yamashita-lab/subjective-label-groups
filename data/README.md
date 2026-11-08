@@ -1,7 +1,5 @@
 # Data
 
-**Status: not yet released.** The files below are described so that the analysis code can be read.
-
 Survey images and image features are not distributed. The survey images were collected from the web without permission from the rights holders, and image content can be partly inferred from such features. Raters and images are identified only by arbitrary IDs. Dates and demographic attributes are not included.
 
 | File | Contents |
