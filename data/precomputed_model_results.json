@@ -1,0 +1,15 @@
+{
+ "note": "Results that need the image features, computed once with the features and fixed here.",
+ "own_group_model": {
+  "observed": 0.179,
+  "raw_p": 0.2668
+ },
+ "transfer_loss": {
+  "observed": 0.264,
+  "raw_p": 0.01095
+ },
+ "model_gap_interval": [
+  -0.1,
+  0.83
+ ]
+}

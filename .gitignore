@@ -1,6 +1,5 @@
-# Anonymised data stay out of version control until their release is confirmed.
-data/*
-!data/README.md
+# Image features are not distributed.
+data/private/
 results/
 __pycache__/
 *.pyc
