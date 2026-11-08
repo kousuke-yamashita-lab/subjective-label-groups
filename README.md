@@ -37,3 +37,7 @@ python analysis/reproduce.py --quick  # short check of the pipeline
 ```
 
 Results are written to `results/summary.md`.
+
+## License
+
+The code is released under the MIT License (see [LICENSE](LICENSE)). The data in `data/` are released under the [Creative Commons Attribution 4.0 International License (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/).
