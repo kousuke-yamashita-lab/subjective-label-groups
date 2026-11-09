@@ -108,28 +108,21 @@ def main():
     if use_features:
         pred, alpha = M.fit_transfer_model("siglip2_base")
         _, z = M.load_training("siglip2_base")
-        pos = {i: k for k, i in enumerate(z["image_ids"])}
-        fast = M.LeaveOneSetOutRidge({s: z["X"][[pos[i] for i in D[s]["imgs"]]] for s in S})
     else:
-        pred, alpha, z, fast = M.load_predictions()["siglip2_base"], None, None, None
+        pred, alpha, z = M.load_predictions()["siglip2_base"], None, None
 
     p1 = lambda d, sets=S: M.icc(d, sets, True) - M.icc(d, sets, False)
     p2 = lambda d, sets=S: M.element_correlation(d, sets, True) - M.element_correlation(d, sets, False)
     p3 = lambda d, sets=S: M.element_correlation(d, sets, True, True) - M.element_correlation(d, sets, False, True)
     p5 = lambda d: M.corrected_fit(d, pred, S, True) - M.corrected_fit(d, pred, S, False)
-    simple = {"rho": p1, "H": p2, "H_res": p3, "1-rho*": lambda d: 1 - M.rho_star(d), "model": p5, "score level": M.score_gap, "accessory weight": M.accessory_weight_gap}
-    extra = ["own-group model", "transfer loss"]
-    names = list(simple) + extra
+    # The five comparisons that support the claims of the paper; Holm adjustment is over these five.
+    simple = {"rho": p1, "H": p2, "H_res": p3, "1-rho*": lambda d: 1 - M.rho_star(d), "model": p5}
+    names = list(simple)
     obs = {k: f(D) for k, f in simple.items()}
-    if use_features:
-        obs[extra[0]], obs[extra[1]] = M.same_group_vs_transfer(D, fast)
-    else:
-        obs[extra[0]], obs[extra[1]] = fixed["own_group_model"]["observed"], fixed["transfer_loss"]["observed"]
 
     # Permutation test: country labels are exchanged between raters, with images and the trained model held fixed.
     rng = np.random.default_rng(11)
     cnt = dict.fromkeys(names, 0); tot = dict.fromkeys(names, 0)
-    permuted = names if use_features else list(simple)
     for _ in range(N_PERM):
         flag = np.zeros(len(persons), bool); flag[rng.choice(len(persons), base.sum(), replace=False)] = True
         Dp = relabel(D, pid, flag)
@@ -137,14 +130,10 @@ def main():
         for k, f in simple.items():
             with np.errstate(all="ignore"):
                 vals[k] = f(Dp)
-        if use_features:
-            vals[extra[0]], vals[extra[1]] = M.same_group_vs_transfer(Dp, fast)
         for k, v in vals.items():
             if not np.isnan(v):
                 tot[k] += 1; cnt[k] += (v >= obs[k]) if k == "1-rho*" else (abs(v) >= abs(obs[k]))
-    raw = {k: (cnt[k] + 1) / (tot[k] + 1) for k in permuted}
-    if not use_features:
-        raw[extra[0]], raw[extra[1]] = fixed["own_group_model"]["raw_p"], fixed["transfer_loss"]["raw_p"]
+    raw = {k: (cnt[k] + 1) / (tot[k] + 1) for k in names}
     adj = dict(zip(names, M.holm([raw[k] for k in names])))
 
     # Half-sampling of raters and resampling of images.
@@ -193,9 +182,7 @@ def main():
          f"| H_res | {M.element_correlation(D,S,True,True):.3f} | {M.element_correlation(D,S,False,True):.3f} | {adj['H_res']:.4f} | [{ci['H_res_diff'][0]:+.3f}, {ci['H_res_diff'][1]:+.3f}] |",
          f"| rho* (value and interval; p against 1) | {M.rho_star(D):.3f} | | {adj['1-rho*']:.4f} | [{ci['rho_star'][0]:+.3f}, {ci['rho_star'][1]:+.3f}] |",
          f"| Model fit | {M.corrected_fit(D,pred,S,True):.3f} | {M.corrected_fit(D,pred,S,False):.3f} | {adj['model']:.4f} | [{interval_model[0]:+.3f}, {interval_model[1]:+.3f}] |", "",
-         "## All nine comparisons", "", "| Comparison | Observed | Holm p |", "|---|---|---|"]
-    L += [f"| {k} | {obs[k]:+.3f} | {adj[k]:.4f} |" for k in names]
-    L += ["", "## Details", "",
+         "## Details", "",
           f"- By condition: blue shirt {M.icc(D,M.BLUE,True):.3f} / {M.icc(D,M.BLUE,False):.3f}, general {M.icc(D,M.GENERAL,True):.3f} / {M.icc(D,M.GENERAL,False):.3f}",
           f"- Rank correlation {rs:.3f}, reliability {rj:.3f} / {rv:.3f}",
           f"- Required raters (R=0.8): JP {M.required_raters(M.icc(D,S,True)):.1f} [{M.required_raters(ci['icc_jp'][1]):.1f}, {M.required_raters(ci['icc_jp'][0]):.1f}], VN {M.required_raters(M.icc(D,S,False)):.1f} [{M.required_raters(ci['icc_vn'][1]):.1f}, {M.required_raters(ci['icc_vn'][0]):.1f}]",
