@@ -104,21 +104,6 @@ def corrected_fit(D, pred, sets, jp):
     return stats.spearmanr(np.concatenate(ps), np.concatenate(ts))[0] / np.sqrt(R) if R > 0 else np.nan
 
 
-def score_gap(D, sets=SETS):
-    return np.mean([D[s]["mats"]["overall"][D[s]["jp"]].mean() - D[s]["mats"]["overall"][~D[s]["jp"]].mean() for s in sets])
-
-
-def accessory_weight_gap(D, sets=SETS):
-    """Difference in the standardised ridge weight of the accessory element on the overall consensus."""
-    def cons(jp):
-        return {c: np.concatenate([consensus(D[s]["mats"][c][D[s]["jp"] == jp].astype(float)) for s in sets]) for c in ["overall"] + ELEMENTS}
-    z = lambda a: (a - a.mean()) / a.std()
-    a, b = cons(True), cons(False)
-    X = np.column_stack([(z(a[k]) + z(b[k])) / 2 for k in ELEMENTS]); X = (X - X.mean(0)) / X.std(0)
-    w = lambda y: np.linalg.solve(X.T @ X + 5 * np.eye(6), X.T @ z(y))
-    return (w(a["overall"]) - w(b["overall"]))[ELEMENTS.index("accessory")]
-
-
 def load_training(feature):
     t = pd.read_csv(DATA / "train_ratings.csv")
     z = np.load(PRIVATE / f"features_{feature}.npz", allow_pickle=True)
@@ -157,58 +142,3 @@ def holm(ps):
     for i, k in enumerate(order):
         run = max(run, min(1, (len(ps) - i) * ps[k])); adj[k] = run
     return adj
-
-
-class LeaveOneSetOutRidge:
-    """Fast ridge that predicts each set from the other five (same criterion as RidgeCV)."""
-
-    def __init__(self, X):
-        self.X = {s: np.asarray(v, dtype=np.float64) for s, v in X.items()}; self.pre = {}
-        for s in SETS:
-            Xt = np.concatenate([self.X[t] for t in SETS if t != s]); mu = Xt.mean(0); Xc = Xt - mu
-            v, Q = np.linalg.eigh(Xc @ Xc.T)
-            self.pre[s] = (Xc, mu, v, Q, int(np.argmax(np.abs(Q.T @ np.ones(len(Q))))))
-
-    def predict(self, teach):
-        out = {}
-        for s in SETS:
-            Xc, mu, v, Q, dim0 = self.pre[s]
-            y = np.concatenate([teach[t] for t in SETS if t != s]); ym = y.mean()
-            Qy = Q.T @ (y - ym); best, bc = np.inf, None
-            for a in ALPHAS:
-                w = 1 / (v + a); w[dim0] = 0
-                c = Q @ (w * Qy); g = (Q ** 2) @ w
-                e = ((c / g) ** 2).mean()
-                if e < best:
-                    best, bc = e, c
-            p = (self.X[s] - mu) @ (Xc.T @ bc) + ym
-            out[s] = p - p.mean()
-        return out
-
-
-def same_group_vs_transfer(D, fast):
-    """(fit of own-group models JP - VN, JP model on JP - JP model on VN), both by leave-one-set-out."""
-    def teach(jp):
-        out = {}
-        for s in SETS:
-            Y = D[s]["mats"]["overall"][D[s]["jp"] == jp]
-            if len(Y) < 1:
-                return None
-            out[s] = consensus(Y)
-        return out
-    tj, tv = teach(True), teach(False)
-    if tj is None or tv is None:
-        return np.nan, np.nan
-    pj, pv = fast.predict(tj), fast.predict(tv)
-
-    def score(pred, jp):
-        ts, ps, comps = [], [], []
-        for s in SETS:
-            Y = D[s]["mats"]["overall"][D[s]["jp"] == jp]
-            if len(Y) < 2:
-                return np.nan
-            ts.append(consensus(Y)); ps.append(pred[s] - pred[s].mean()); comps.append((*variance_components(Y), len(Y)))
-        R = _reliability(comps)
-        return stats.spearmanr(np.concatenate(ps), np.concatenate(ts))[0] / np.sqrt(R) if R > 0 else np.nan
-    jj = score(pj, True)
-    return jj - score(pv, False), jj - score(pj, False)

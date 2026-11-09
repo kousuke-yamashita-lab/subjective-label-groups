@@ -8,7 +8,7 @@ Survey images and image features are not distributed. The survey images were col
 | `selection_scores.csv` | The score of the pre-trained model used to build the image sets: `image_id`, `set_id`, `selection_score` |
 | `train_ratings.csv` | The separate Japanese ratings used to train the transfer model: `rater_id`, `form_id`, `image_id`, `overall` |
 | `model_predictions.csv` | Per-image predictions of the transfer model, one column per image feature (`siglip2_base`, `siglip_so400m`, `clip_l14`, `fashion_clip`, `vit_in21k`) |
-| `precomputed_model_results.json` | Results that need the image features, fixed from a single full run: the two leave-one-set-out comparisons and the model gap interval |
+| `precomputed_model_results.json` | The model gap interval, which needs the image features, fixed from a single full run |
 
 ## License
 
