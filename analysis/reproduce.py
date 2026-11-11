@@ -94,6 +94,25 @@ def model_interval(D, z, alpha, N_MODEL):
     return np.nanpercentile(gaps, [2.5, 97.5])
 
 
+def imbalance_checks(D, n_draw=2000, n_per=5, seed=0):
+    """Influence of the unequal numbers of raters per set: rho with each set removed,
+    and rho with the raters of both groups resampled to n_per per set."""
+    drop = {s: (M.icc(D, [x for x in S if x != s], True), M.icc(D, [x for x in S if x != s], False)) for s in S}
+    rng = np.random.default_rng(seed)
+    r = []
+    for _ in range(n_draw):
+        Db = {}
+        for s in S:
+            idx = []
+            for j in (True, False):
+                w = np.where(D[s]["jp"] == j)[0]
+                idx += list(rng.choice(w, n_per, replace=False))
+            idx = np.array(idx)
+            Db[s] = {"mats": {"overall": D[s]["mats"]["overall"][idx]}, "jp": D[s]["jp"][idx], "imgs": D[s]["imgs"]}
+        r.append((M.icc(Db, S, True), M.icc(Db, S, False)))
+    return drop, np.array(r)
+
+
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--quick", action="store_true")
     q = ap.parse_args().quick
@@ -203,6 +222,11 @@ def main():
         pr = M.fit_transfer_model(f)[0] if use_features else M.load_predictions()[f]
         a, b = M.corrected_fit(D, pr, S, True), M.corrected_fit(D, pr, S, False)
         L.append(f"- {f}: {a:.3f} / {b:.3f}, {a-b:+.3f}")
+    drop, eq = imbalance_checks(D)
+    L += ["", "## Unequal numbers of raters per set", "", "| Condition | Japanese | Vietnamese | Difference |", "|---|---|---|---|"]
+    L += [f"| {s} removed | {a:.3f} | {v:.3f} | {a - v:+.3f} |" for s, (a, v) in drop.items()]
+    L += [f"| Five raters per set, resampled (mean of {len(eq)}) | {eq[:, 0].mean():.3f} | {eq[:, 1].mean():.3f} | {(eq[:, 0] - eq[:, 1]).mean():+.3f} |",
+          "", f"Draws in which the Japanese group is higher: {int((eq[:, 0] > eq[:, 1]).sum())} of {len(eq)}"]
     L += ["", "## By set", "", "| Set | JP raters | VN raters | rho difference | H difference |", "|---|---|---|---|---|"]
     L += [f"| {s} | {int(D[s]['jp'].sum())} | {int((~D[s]['jp']).sum())} | {p1(D,[s]):+.2f} | {p2(D,[s]):+.2f} |" for s in S]
     (RES / "summary.md").write_text("\n".join(L) + "\n", encoding="utf-8")
