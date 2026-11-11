@@ -2,6 +2,6 @@
  "note": "The model gap interval needs the image features; it was computed once with the features and fixed here.",
  "model_gap_interval": [
   -0.1,
-  0.83
+  0.82
  ]
 }

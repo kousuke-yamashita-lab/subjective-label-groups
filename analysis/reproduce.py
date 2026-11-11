@@ -160,6 +160,12 @@ def main():
             with np.errstate(all="ignore"):
                 h[k].append(f(Db))
     ci = {k: interval(q1[k](D), v) for k, v in h.items()}
+    # Ratio of required raters (VN / JP). It does not depend on the target reliability R.
+    # Interval: the same shifted percentile as above, on the log scale.
+    kr = lambda a, b: M.required_raters(b) / M.required_raters(a)
+    ratio_obs = kr(M.icc(D, S, True), M.icc(D, S, False))
+    lr = np.log([kr(a, b) for a, b in zip(h["icc_jp"], h["icc_vn"])]); lr = lr[np.isfinite(lr)]
+    ratio_ci = tuple(float(np.exp(np.log(ratio_obs) + np.percentile(lr, q) - lr.mean())) for q in (2.5, 97.5))
 
     # Sensitivity: images near the middle of the selection score, and without flat responses.
     Dmid = {s: {**D[s], "mats": {c: v[:, mid[s]] for c, v in D[s]["mats"].items()}, "imgs": [D[s]["imgs"][i] for i in mid[s]]} for s in S}
@@ -185,7 +191,7 @@ def main():
          "## Details", "",
           f"- By condition: blue shirt {M.icc(D,M.BLUE,True):.3f} / {M.icc(D,M.BLUE,False):.3f}, general {M.icc(D,M.GENERAL,True):.3f} / {M.icc(D,M.GENERAL,False):.3f}",
           f"- Rank correlation {rs:.3f}, reliability {rj:.3f} / {rv:.3f}",
-          f"- Required raters (R=0.8): JP {M.required_raters(M.icc(D,S,True)):.1f} [{M.required_raters(ci['icc_jp'][1]):.1f}, {M.required_raters(ci['icc_jp'][0]):.1f}], VN {M.required_raters(M.icc(D,S,False)):.1f} [{M.required_raters(ci['icc_vn'][1]):.1f}, {M.required_raters(ci['icc_vn'][0]):.1f}]",
+          f"- Required raters (R=0.8): JP {M.required_raters(M.icc(D,S,True)):.1f} [{M.required_raters(ci['icc_jp'][1]):.1f}, {M.required_raters(ci['icc_jp'][0]):.1f}], VN {M.required_raters(M.icc(D,S,False)):.1f} [{M.required_raters(ci['icc_vn'][1]):.1f}, {M.required_raters(ci['icc_vn'][0]):.1f}], ratio VN/JP {ratio_obs:.1f} [{ratio_ci[0]:.1f}, {ratio_ci[1]:.1f}]",
           f"- Selection score vs consensus: JP {stats.spearmanr(np.concatenate([x[s]-x[s].mean() for s in S]), np.concatenate([M.consensus(D[s]['mats']['overall'][D[s]['jp']]) for s in S]))[0]:+.3f}, VN {stats.spearmanr(np.concatenate([x[s]-x[s].mean() for s in S]), np.concatenate([M.consensus(D[s]['mats']['overall'][~D[s]['jp']]) for s in S]))[0]:+.3f}",
           f"- 30 images near the middle of the score: {M.icc(Dmid,S,True):.3f} / {M.icc(Dmid,S,False):.3f}, difference {p1(Dmid):+.3f} [{interval(p1(Dmid),mids)[0]:+.3f}, {interval(p1(Dmid),mids)[1]:+.3f}]",
           f"- Flat responses: JP {n_flat[True]} of {int(sum(D[s]['jp'].sum() for s in S))}, VN {n_flat[False]} of {int(sum((~D[s]['jp']).sum() for s in S))}",
