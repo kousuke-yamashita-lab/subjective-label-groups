@@ -1,6 +1,6 @@
 # Subjective label properties across rater groups
 
-Analysis code for a case study comparing the reliability and structure of subjective labels for identical images across rater groups, using outfit quirkiness ratings by Japanese and Vietnamese raters.
+Analysis code and data for the paper "Rater Groups Matter in Designing Subjective Label Collection: A Case Study of Outfit Eccentricity Ratings by Japanese and Vietnamese Raters". The study compares how the properties of subjective labels (the strength of agreement among raters, the distinction of elements, and the rating standards) differ between two rater groups who rated the same outfit images.
 
 The paper is in preparation. A citation will be added when it is available.
 
