@@ -65,5 +65,36 @@
     0.417
    ]
   }
- }
+ },
+ "matched_section": [
+  "",
+  "## Label reliability and model accuracy (matched design)",
+  "",
+  "Sets S1, S2, S4, S5, S6 (S3 has too few raters). In both groups the target of a held-out set is the consensus of 3 randomly drawn raters and the training labels are the consensus of k other raters per training set; the target persons are never used for training. Ridge on SigLIP2-base features, leave-one-set-out; means of 500 rater draws.",
+  "",
+  "On these sets: rho 0.565 / 0.154, required-rater ratio VN/JP 7.1; rho_spec 0.268 / 0.067.",
+  "",
+  "| Group | k | Label reliability (Spearman-Brown) | Label reliability (empirical) | Model accuracy (corrected) | Rank correlation (uncorrected) |",
+  "|---|---|---|---|---|---|",
+  "| JP | 1 | 0.56 | 0.58 | 0.624 | 0.557 |",
+  "| JP | 2 | 0.72 | 0.74 | 0.685 | 0.611 |",
+  "| JP | 3 | 0.80 | 0.81 | 0.713 | 0.636 |",
+  "| JP | 4 | 0.84 | 0.85 | 0.726 | 0.647 |",
+  "| VN | 1 | 0.15 | 0.16 | 0.236 | 0.140 |",
+  "| VN | 2 | 0.27 | 0.28 | 0.353 | 0.210 |",
+  "| VN | 3 | 0.35 | 0.36 | 0.441 | 0.262 |",
+  "| VN | 4 | 0.42 | 0.44 | 0.508 | 0.302 |",
+  "",
+  "Correlation between sqrt(label reliability) and model accuracy over the 8 conditions: 0.995. Accuracy / sqrt(label reliability): JP 0.83, 0.81, 0.80, 0.79; VN 0.60, 0.68, 0.74, 0.78.",
+  "Element-specific part, k = 4, rank correlation (uncorrected): JP 0.473, VN 0.158 (reliability of the 3-rater target 0.55 / 0.18).",
+  "",
+  "Uncertainty: interval from 400 resamples of the images within sets with new rater draws; p from 600 exchanges of group labels between raters (two-sided, not Holm-adjusted).",
+  "",
+  "| Statistic | Observed | 95% interval | p (valid permutations) |",
+  "|---|---|---|---|",
+  "| Accuracy, k = 1, JP - VN | +0.388 | [-0.011, +0.796] | 0.0498 (521) |",
+  "| Accuracy, k = 4, JP - VN | +0.217 | [-0.272, +0.779] | 0.2280 (521) |",
+  "| Gain from k = 1 to 4, VN - JP | +0.171 | [-0.309, +0.567] | 0.3678 (521) |",
+  "| Element-specific part, k = 4, JP - VN (uncorrected) | +0.316 | [+0.169, +0.460] | 0.0019 (521) |"
+ ]
 }

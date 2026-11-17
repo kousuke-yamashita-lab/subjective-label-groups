@@ -116,11 +116,84 @@ def imbalance_checks(D, n_draw=2000, n_per=5, seed=0):
 SEED_EXTRA = 20261116
 
 
+def matched_section(D, persons, pid, base, use_features, fixed, q):
+    """Label reliability and model accuracy in the matched design (S3 left out, target 3 raters, training k other raters)."""
+    if not use_features:
+        return fixed["matched_section"] + ["", "Image features not available: the section above is the fixed output of a full run with the features."]
+    SM, KS, MT = M.MATCHED_SETS, [1, 2, 3, 4], 3
+    n_obs, n_b, n_p, inner = (40, 20, 20, 3) if q else (500, 400, 600, 6)
+    z = np.load(M.PRIVATE / "features_siglip2_base.npz", allow_pickle=True)
+    F = {i: v for i, v in zip(z["image_ids"], z["X"].astype(float))}
+    X = {s: np.stack([F[i] for i in D[s]["imgs"]]) for s in SM}
+    G = (("JP", True), ("VN", False))
+    sb = lambda r, k: k * r / (1 + (k - 1) * r)
+
+    def table(Dx, rng, n, ks, imgs=None, with_elements=True):
+        out = {}
+        with np.errstate(all="ignore"):
+            for g, jp in G:
+                Rm = M.target_reliability(Dx, SM, jp, ["overall"], MT)
+                for k in ks:
+                    v = np.array([M.matched_draw(Dx, X, jp, k, rng, imgs=imgs) for _ in range(n)], float)
+                    lab, mod = np.nanmean(v[:, 0]), np.nanmean(v[:, 1])
+                    out[(g, k)] = (lab ** 2 / Rm if Rm > 0 else np.nan, mod / np.sqrt(Rm) if Rm > 0 else np.nan, mod)
+                if with_elements:
+                    v = np.array([M.matched_draw(Dx, X, jp, 4, rng, cols=M.SPEC, imgs=imgs) for _ in range(n)], float)
+                    out[(g, "el")] = float(np.nanmean(v[:, 1]))
+        return out
+
+    def summary(tb):
+        return {"diff_k1": tb[("JP", 1)][1] - tb[("VN", 1)][1], "diff_k4": tb[("JP", 4)][1] - tb[("VN", 4)][1],
+                "gain_diff": (tb[("VN", 4)][1] - tb[("VN", 1)][1]) - (tb[("JP", 4)][1] - tb[("JP", 1)][1]),
+                "element_diff": tb[("JP", "el")] - tb[("VN", "el")]}
+
+    rng = np.random.default_rng(SEED_EXTRA + 1)
+    tb = table(D, rng, n_obs, KS)
+    rho = {g: M.icc(D, SM, jp) for g, jp in G}
+    L = ["", "## Label reliability and model accuracy (matched design)", "",
+         f"Sets {', '.join(SM)} (S3 has too few raters). In both groups the target of a held-out set is the consensus of {MT} randomly drawn raters "
+         "and the training labels are the consensus of k other raters per training set; the target persons are never used for training. "
+         f"Ridge on SigLIP2-base features, leave-one-set-out; means of {n_obs} rater draws.", "",
+         f"On these sets: rho {rho['JP']:.3f} / {rho['VN']:.3f}, required-rater ratio VN/JP {M.required_raters(rho['VN']) / M.required_raters(rho['JP']):.1f}; "
+         f"rho_spec {M.element_specific_agreement(D, SM, True):.3f} / {M.element_specific_agreement(D, SM, False):.3f}.", "",
+         "| Group | k | Label reliability (Spearman-Brown) | Label reliability (empirical) | Model accuracy (corrected) | Rank correlation (uncorrected) |", "|---|---|---|---|---|---|"]
+    for g, _ in G:
+        for k in KS:
+            L.append(f"| {g} | {k} | {sb(rho[g], k):.2f} | {tb[(g, k)][0]:.2f} | {tb[(g, k)][1]:.3f} | {tb[(g, k)][2]:.3f} |")
+    xs = np.sqrt([sb(rho[g], k) for g, _ in G for k in KS]); ys = [tb[(g, k)][1] for g, _ in G for k in KS]
+    L += ["", f"Correlation between sqrt(label reliability) and model accuracy over the 8 conditions: {np.corrcoef(xs, ys)[0, 1]:.3f}. "
+          "Accuracy / sqrt(label reliability): " + "; ".join(f"{g} " + ", ".join(f"{tb[(g, k)][1] / np.sqrt(sb(rho[g], k)):.2f}" for k in KS) for g, _ in G) + ".",
+          f"Element-specific part, k = 4, rank correlation (uncorrected): JP {tb[('JP', 'el')]:.3f}, VN {tb[('VN', 'el')]:.3f} "
+          f"(reliability of the {MT}-rater target {M.target_reliability(D, SM, True, M.SPEC, MT):.2f} / {M.target_reliability(D, SM, False, M.SPEC, MT):.2f})."]
+    obs = summary(tb)
+    rng = np.random.default_rng(SEED_EXTRA + 2); dr = {k: [] for k in obs}
+    for _ in range(n_b):
+        imgs = {s: rng.choice(10, 10) for s in SM}
+        for k, v in summary(table(D, rng, inner, [1, 4], imgs=imgs)).items():
+            dr[k].append(v)
+    rng = np.random.default_rng(SEED_EXTRA + 3); cnt = dict.fromkeys(obs, 0); tot = dict.fromkeys(obs, 0)
+    for _ in range(n_p):
+        flag = np.zeros(len(persons), bool); flag[rng.choice(len(persons), int(base.sum()), replace=False)] = True
+        for k, v in summary(table(relabel(D, pid, flag), rng, inner, [1, 4])).items():
+            if np.isfinite(v):
+                tot[k] += 1; cnt[k] += abs(v) >= abs(obs[k])
+    L += ["", f"Uncertainty: interval from {n_b} resamples of the images within sets with new rater draws; p from {n_p} exchanges of group labels between raters (two-sided, not Holm-adjusted).", "",
+          "| Statistic | Observed | 95% interval | p (valid permutations) |", "|---|---|---|---|"]
+    names = {"diff_k1": "Accuracy, k = 1, JP - VN", "diff_k4": "Accuracy, k = 4, JP - VN", "gain_diff": "Gain from k = 1 to 4, VN - JP", "element_diff": "Element-specific part, k = 4, JP - VN (uncorrected)"}
+    for k in obs:
+        lo, hi = interval(obs[k], dr[k])
+        L.append(f"| {names[k]} | {obs[k]:+.3f} | [{lo:+.3f}, {hi:+.3f}] | {(cnt[k] + 1) / (tot[k] + 1):.4f} ({tot[k]}) |")
+    if not q:
+        fixed["matched_section"] = L
+        (M.DATA / "precomputed_model_results.json").write_text(json.dumps(fixed, indent=1) + "\n", encoding="utf-8")
+    return L
+
+
 def within_group_section(D, use_features, fixed, q):
     """Agreement and model accuracy: models trained on the consensus of k raters per image within each group."""
     KS = [1, 2, 3, 5, None]
     n_draw = 30 if q else 300
-    L = ["", "## Agreement and model accuracy within each group", "",
+    L = ["", "## Supplementary: all six sets with unequal numbers of raters", "",
          "Ridge on SigLIP2-base features, leave-one-set-out, trained on the consensus of k raters per training image; "
          "accuracy = rank correlation with the held-out consensus of all raters of the same group / sqrt(its reliability). "
          "Persons who rated the held-out set are not used for training. Mean [2.5%, 97.5%] over draws of the training raters.", "",
@@ -205,8 +278,9 @@ def main():
     p2 = lambda d, sets=S: M.element_correlation(d, sets, True) - M.element_correlation(d, sets, False)
     p3 = lambda d, sets=S: M.element_correlation(d, sets, True, True) - M.element_correlation(d, sets, False, True)
     p5 = lambda d: M.corrected_fit(d, pred, S, True) - M.corrected_fit(d, pred, S, False)
-    # The five comparisons that support the claims of the paper; Holm adjustment is over these five.
-    simple = {"rho": p1, "H": p2, "H_res": p3, "1-rho*": lambda d: 1 - M.rho_star(d), "model": p5}
+    p6 = lambda d, sets=S: M.element_specific_agreement(d, sets, True) - M.element_specific_agreement(d, sets, False)
+    # The six comparisons that support the claims of the paper; Holm adjustment is over these six.
+    simple = {"rho": p1, "H": p2, "H_res": p3, "rho_spec": p6, "1-rho*": lambda d: 1 - M.rho_star(d), "model": p5}
     names = list(simple)
     obs = {k: f(D) for k, f in simple.items()}
 
@@ -241,7 +315,8 @@ def main():
         flat[s] = {**D[s], "mats": {c: v[k] for c, v in D[s]["mats"].items()}, "person": D[s]["person"][k], "jp": D[s]["jp"][k]}
     keep_f = {s: np.isin(D[s]["person"], flat[s]["person"]) for s in S}
 
-    q1 = {"rho_diff": p1, "H_diff": p2, "H_res_diff": p3, "rho_star": M.rho_star, "icc_jp": lambda d: M.icc(d, S, True), "icc_vn": lambda d: M.icc(d, S, False)}
+    q1 = {"rho_diff": p1, "H_diff": p2, "H_res_diff": p3, "rho_star": M.rho_star, "icc_jp": lambda d: M.icc(d, S, True), "icc_vn": lambda d: M.icc(d, S, False),
+          "rho_spec_diff": p6, "spec_jp": lambda d: M.element_specific_agreement(d, S, True), "spec_vn": lambda d: M.element_specific_agreement(d, S, False)}
     h = {k: [] for k in q1}
     rng = np.random.default_rng(20261107)
     for _ in range(N_HALF):
@@ -259,13 +334,13 @@ def main():
 
     # Sensitivity: images near the middle of the selection score, and without flat responses.
     Dmid = {s: {**D[s], "mats": {c: v[:, mid[s]] for c, v in D[s]["mats"].items()}, "imgs": [D[s]["imgs"][i] for i in mid[s]]} for s in S}
-    mids, fH, fHr, fR = [], [], [], []
+    mids, fH, fHr, fR, fS = [], [], [], [], []
     rng = np.random.default_rng(20261108)
     for _ in range(N_HALF):
         mids.append(p1(half_draw(D, pid, cst, len(persons), rng, images=mid)))
         Db = half_draw(flat, {s: pid[s][keep_f[s]] for s in S}, cst, len(persons), rng)
         with np.errstate(all="ignore"):
-            fH.append(p2(Db)); fHr.append(p3(Db)); fR.append(p1(Db))
+            fH.append(p2(Db)); fHr.append(p3(Db)); fR.append(p1(Db)); fS.append(p6(Db))
 
     interval_model = tuple(model_interval(D, z, alpha, N_MODEL)) if use_features else tuple(fixed["model_gap_interval"])
 
@@ -276,6 +351,7 @@ def main():
          f"| Agreement rho | {M.icc(D,S,True):.3f} | {M.icc(D,S,False):.3f} | {adj['rho']:.4f} | [{ci['rho_diff'][0]:+.3f}, {ci['rho_diff'][1]:+.3f}] |",
          f"| H | {M.element_correlation(D,S,True):.3f} | {M.element_correlation(D,S,False):.3f} | {adj['H']:.4f} | [{ci['H_diff'][0]:+.3f}, {ci['H_diff'][1]:+.3f}] |",
          f"| H_res | {M.element_correlation(D,S,True,True):.3f} | {M.element_correlation(D,S,False,True):.3f} | {adj['H_res']:.4f} | [{ci['H_res_diff'][0]:+.3f}, {ci['H_res_diff'][1]:+.3f}] |",
+         f"| Element-specific agreement rho_spec | {M.element_specific_agreement(D,S,True):.3f} [{ci['spec_jp'][0]:.3f}, {ci['spec_jp'][1]:.3f}] | {M.element_specific_agreement(D,S,False):.3f} [{ci['spec_vn'][0]:.3f}, {ci['spec_vn'][1]:.3f}] | {adj['rho_spec']:.4f} | [{ci['rho_spec_diff'][0]:+.3f}, {ci['rho_spec_diff'][1]:+.3f}] |",
          f"| rho* (value and interval; p against 1) | {M.rho_star(D):.3f} | | {adj['1-rho*']:.4f} | [{ci['rho_star'][0]:+.3f}, {ci['rho_star'][1]:+.3f}] |",
          f"| Model fit | {M.corrected_fit(D,pred,S,True):.3f} | {M.corrected_fit(D,pred,S,False):.3f} | {adj['model']:.4f} | [{interval_model[0]:+.3f}, {interval_model[1]:+.3f}] |", "",
          "## Details", "",
@@ -287,7 +363,9 @@ def main():
           f"- Flat responses: JP {n_flat[True]} of {int(sum(D[s]['jp'].sum() for s in S))}, VN {n_flat[False]} of {int(sum((~D[s]['jp']).sum() for s in S))}",
           f"  - H difference {p2(flat):+.3f} [{interval(p2(flat),fH)[0]:+.3f}, {interval(p2(flat),fH)[1]:+.3f}]",
           f"  - H_res difference {p3(flat):+.3f} [{interval(p3(flat),fHr)[0]:+.3f}, {interval(p3(flat),fHr)[1]:+.3f}]",
-          f"  - rho {M.icc(flat,S,True):.3f} / {M.icc(flat,S,False):.3f}, difference {p1(flat):+.3f} [{interval(p1(flat),fR)[0]:+.3f}, {interval(p1(flat),fR)[1]:+.3f}]", "",
+          f"  - rho {M.icc(flat,S,True):.3f} / {M.icc(flat,S,False):.3f}, difference {p1(flat):+.3f} [{interval(p1(flat),fR)[0]:+.3f}, {interval(p1(flat),fR)[1]:+.3f}]",
+          f"  - rho_spec {M.element_specific_agreement(flat,S,True):.3f} / {M.element_specific_agreement(flat,S,False):.3f}, difference {p6(flat):+.3f} [{interval(p6(flat),fS)[0]:+.3f}, {interval(p6(flat),fS)[1]:+.3f}]",
+          "- rho_spec by element (JP / VN): " + "; ".join(f"{e} {M.icc(D,S,True,'spec_'+e):.2f} / {M.icc(D,S,False,'spec_'+e):.2f}" for e in M.ELEMENTS), "",
           "## Other image features (difference in corrected rank correlation)", ""]
     for f in M.FEATURES:
         pr = M.fit_transfer_model(f)[0] if use_features else M.load_predictions()[f]
@@ -300,6 +378,7 @@ def main():
           "", f"Draws in which the Japanese group is higher: {int((eq[:, 0] > eq[:, 1]).sum())} of {len(eq)}"]
     L += ["", "## By set", "", "| Set | JP raters | VN raters | rho difference | H difference |", "|---|---|---|---|---|"]
     L += [f"| {s} | {int(D[s]['jp'].sum())} | {int((~D[s]['jp']).sum())} | {p1(D,[s]):+.2f} | {p2(D,[s]):+.2f} |" for s in S]
+    L += matched_section(D, persons, pid, base, use_features, fixed, q)
     L += within_group_section(D, use_features, fixed, q)
     L += pilot_section(D, q)
     (RES / "summary.md").write_text("\n".join(L) + "\n", encoding="utf-8")

@@ -22,6 +22,10 @@ def load_ratings(path=None):
     for s, g in df.groupby("set_id"):
         raters = sorted(g.rater_id.unique()); imgs = sorted(g.image_id.unique())
         mats = {c: g.pivot(index="rater_id", columns="image_id", values=c).loc[raters, imgs].to_numpy(float) for c in ["overall"] + ELEMENTS}
+        Z = np.stack([mats[c] for c in ELEMENTS], -1)
+        for j, c in enumerate(ELEMENTS):
+            # element-specific part: the element rating minus the rater's mean over the six elements for the image
+            mats["spec_" + c] = Z[..., j] - Z.mean(-1)
         group = g.drop_duplicates("rater_id").set_index("rater_id").group
         out[s] = {"mats": mats, "person": np.array(raters), "jp": np.array([group[r] == "JP" for r in raters]), "imgs": imgs}
     return out
@@ -180,3 +184,55 @@ def pilot_subset(D, sets, n, rng):
             keep[rng.choice(idx, min(n, len(idx)), replace=False)] = True
         out[s] = {**D[s], "mats": {c: v[keep] for c, v in D[s]["mats"].items()}, "person": D[s]["person"][keep], "jp": D[s]["jp"][keep]}
     return out
+
+
+MATCHED_SETS = [s for s in SETS if s != "S3"]   # S3 has too few raters for the matched design
+SPEC = ["spec_" + c for c in ELEMENTS]
+
+
+def element_specific_agreement(D, sets, jp):
+    """Mean over the six elements of ICC(C,1) of the element-specific part."""
+    return float(np.mean([icc(D, sets, jp, c) for c in SPEC]))
+
+
+def target_reliability(D, sets, jp, cols, m):
+    """Reliability of the consensus of m raters, with variance components averaged over sets and columns."""
+    c = np.array([variance_components(D[s]["mats"][col][D[s]["jp"] == jp]) for s in sets for col in cols])
+    return c[:, 0].mean() / (c[:, 0].mean() + c[:, 1].mean() / m)
+
+
+def matched_draw(D, X, jp, k, rng, cols=("overall",), sets=None, m=3, imgs=None):
+    """One draw of the matched design. For each held-out set the target is the consensus of m randomly drawn raters;
+    training labels are the consensus of k other raters per training set, and the m target persons are never used
+    for training. Returns (label_r, model_r): the Pearson correlation between the k-rater and the m-rater consensus
+    of the same set, and the rank correlation between the predictions and the m-rater consensus, each pooled over
+    the held-out sets and the columns. X: {set_id: features}; imgs: optional {set_id: image indices} (resampling)."""
+    sets = MATCHED_SETS if sets is None else sets
+    la, lb, ps, ts = [], [], [], []
+    for te in sets:
+        idx = np.where(D[te]["jp"] == jp)[0]
+        if len(idx) < m + 1:
+            return np.nan, np.nan
+        perm = rng.permutation(idx); tgt, oth = perm[:m], perm[m:m + k]
+        ci = np.arange(X[te].shape[0]) if imgs is None else imgs[te]
+        excl = list(D[te]["person"][tgt])
+        Xtr, Ytr = [], []
+        for tr in sets:
+            if tr == te:
+                continue
+            pool = np.where((D[tr]["jp"] == jp) & ~np.isin(D[tr]["person"], excl))[0]
+            if len(pool) == 0:
+                continue
+            pick = rng.choice(pool, min(k, len(pool)), replace=False)
+            cj = np.arange(X[tr].shape[0]) if imgs is None else imgs[tr]
+            Xtr.append(X[tr][cj]); Ytr.append(np.stack([consensus(D[tr]["mats"][c][pick][:, cj]) for c in cols], 1))
+        if not Xtr:
+            return np.nan, np.nan
+        P = RidgeCV(alphas=ALPHAS, alpha_per_target=True).fit(np.concatenate(Xtr), np.concatenate(Ytr)).predict(X[te][ci])
+        P = P.reshape(len(ci), -1)
+        for j, c in enumerate(cols):
+            Y = D[te]["mats"][c][:, ci]
+            ct = consensus(Y[tgt]); la.append(consensus(Y[oth])); lb.append(ct)
+            ps.append(P[:, j] - P[:, j].mean()); ts.append(ct)
+    with np.errstate(all="ignore"):
+        return np.corrcoef(np.concatenate(la), np.concatenate(lb))[0, 1], stats.spearmanr(np.concatenate(ps), np.concatenate(ts))[0]
