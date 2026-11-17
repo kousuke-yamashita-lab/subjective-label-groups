@@ -113,6 +113,77 @@ def imbalance_checks(D, n_draw=2000, n_per=5, seed=0):
     return drop, np.array(r)
 
 
+SEED_EXTRA = 20261116
+
+
+def within_group_section(D, use_features, fixed, q):
+    """Agreement and model accuracy: models trained on the consensus of k raters per image within each group."""
+    KS = [1, 2, 3, 5, None]
+    n_draw = 30 if q else 300
+    L = ["", "## Agreement and model accuracy within each group", "",
+         "Ridge on SigLIP2-base features, leave-one-set-out, trained on the consensus of k raters per training image; "
+         "accuracy = rank correlation with the held-out consensus of all raters of the same group / sqrt(its reliability). "
+         "Persons who rated the held-out set are not used for training. Mean [2.5%, 97.5%] over draws of the training raters.", "",
+         "| k | Japanese | Vietnamese |", "|---|---|---|"]
+    if use_features:
+        z = np.load(M.PRIVATE / "features_siglip2_base.npz", allow_pickle=True)
+        F = {i: v for i, v in zip(z["image_ids"], z["X"].astype(float))}
+        X = {s: np.stack([F[i] for i in D[s]["imgs"]]) for s in S}
+        rng = np.random.default_rng(SEED_EXTRA)
+        res = {}
+        for k in KS:
+            lab = "all" if k is None else str(k)
+            res[lab] = {}
+            for g, jp in (("JP", True), ("VN", False)):
+                v = np.array([M.within_group_accuracy(D, X, jp, k, rng) for _ in range(1 if k is None else n_draw)])
+                res[lab][g] = [float(v.mean()), float(np.percentile(v, 2.5)), float(np.percentile(v, 97.5))]
+    else:
+        res = fixed["within_group_accuracy"]
+    for lab, r in res.items():
+        f = lambda a: f"{a[0]:.3f}" if lab == "all" else f"{a[0]:.3f} [{a[1]:.3f}, {a[2]:.3f}]"
+        L.append(f"| {lab} | {f(r['JP'])} | {f(r['VN'])} |")
+    if not use_features:
+        L += ["", "Image features not available: the values above are fixed results of a full run with the features."]
+    return L
+
+
+def pilot_section(D, q):
+    """Proportion of simulated pilots that reach the same decisions as the full data."""
+    n_pilot = 200 if q else 2000
+    rj, rv = M.icc(D, S, True), M.icc(D, S, False)
+    L = ["", "## Size of a pilot study", "",
+         f"Full data: rho {rj:.3f} / {rv:.3f}, required-rater ratio VN/JP {M.required_raters(rv) / M.required_raters(rj):.1f}. "
+         f"Proportion of {n_pilot} simulated pilots that reach the same decision as the full data.", "",
+         "| Pilot | Images | rho_VN < rho_JP | Ratio >= 2 | Median ratio [IQR] | H_VN > H_JP | H_res_VN > H_res_JP | All three directions |",
+         "|---|---|---|---|---|---|---|---|"]
+    for n_sets in (1, 2, 4, 6):
+        for n in (3, 5, 8):
+            rng = np.random.default_rng(SEED_EXTRA + 100 * n_sets + n)
+            a = b = c = d = e = 0; ratios = []
+            for _ in range(n_pilot):
+                if n_sets == 6:
+                    sets = S
+                elif n_sets % 2 == 0:
+                    sets = list(rng.choice(M.BLUE, n_sets // 2, replace=False)) + list(rng.choice(M.GENERAL, n_sets // 2, replace=False))
+                else:
+                    sets = list(rng.choice(S, n_sets, replace=False))
+                P = M.pilot_subset(D, sets, n, rng)
+                with np.errstate(all="ignore"):
+                    pj, pv = M.icc(P, sets, True), M.icc(P, sets, False)
+                    hj, hv = M.element_correlation(P, sets, True), M.element_correlation(P, sets, False)
+                    qj, qv = M.element_correlation(P, sets, True, True), M.element_correlation(P, sets, False, True)
+                r = M.required_raters(pv) / M.required_raters(pj) if pj > 0 else np.nan
+                ratios.append(r if np.isfinite(r) else 1e9)
+                ok1 = pv < pj; ok2 = ((pv <= 0) or (np.isfinite(r) and r >= 2)) if pj > 0 else False
+                ok3 = hv > hj; ok4 = qv > qj
+                a += ok1; b += ok2; c += ok3; d += ok4; e += (ok1 and ok3 and ok4)
+            qq = np.percentile(ratios, [25, 50, 75]); fq = lambda x: ">100" if x > 100 else f"{x:.1f}"
+            L.append(f"| {n_sets} set{'s' if n_sets > 1 else ''} x {n} raters per group | {10 * n_sets} | {a / n_pilot:.2f} | {b / n_pilot:.2f} | "
+                     f"{fq(qq[1])} [{fq(qq[0])}, {fq(qq[2])}] | {c / n_pilot:.2f} | {d / n_pilot:.2f} | {e / n_pilot:.2f} |")
+    L += ["", "Raters per set are capped by availability (the smallest set has 6 Japanese and 5 Vietnamese raters)."]
+    return L
+
+
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--quick", action="store_true")
     q = ap.parse_args().quick
@@ -229,6 +300,8 @@ def main():
           "", f"Draws in which the Japanese group is higher: {int((eq[:, 0] > eq[:, 1]).sum())} of {len(eq)}"]
     L += ["", "## By set", "", "| Set | JP raters | VN raters | rho difference | H difference |", "|---|---|---|---|---|"]
     L += [f"| {s} | {int(D[s]['jp'].sum())} | {int((~D[s]['jp']).sum())} | {p1(D,[s]):+.2f} | {p2(D,[s]):+.2f} |" for s in S]
+    L += within_group_section(D, use_features, fixed, q)
+    L += pilot_section(D, q)
     (RES / "summary.md").write_text("\n".join(L) + "\n", encoding="utf-8")
     print("\n".join(L))
 

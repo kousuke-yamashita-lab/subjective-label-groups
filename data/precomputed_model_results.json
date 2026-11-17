@@ -1,7 +1,69 @@
 {
- "note": "The model gap interval needs the image features; it was computed once with the features and fixed here.",
+ "note": "Results that need the image features; they were computed once with the features (full run) and fixed here.",
  "model_gap_interval": [
   -0.1,
   0.82
- ]
+ ],
+ "within_group_accuracy": {
+  "1": {
+   "JP": [
+    0.561,
+    0.391,
+    0.711
+   ],
+   "VN": [
+    0.203,
+    -0.072,
+    0.504
+   ]
+  },
+  "2": {
+   "JP": [
+    0.608,
+    0.484,
+    0.706
+   ],
+   "VN": [
+    0.297,
+    0.018,
+    0.574
+   ]
+  },
+  "3": {
+   "JP": [
+    0.621,
+    0.525,
+    0.702
+   ],
+   "VN": [
+    0.333,
+    0.089,
+    0.539
+   ]
+  },
+  "5": {
+   "JP": [
+    0.641,
+    0.587,
+    0.69
+   ],
+   "VN": [
+    0.39,
+    0.235,
+    0.55
+   ]
+  },
+  "all": {
+   "JP": [
+    0.647,
+    0.647,
+    0.647
+   ],
+   "VN": [
+    0.417,
+    0.417,
+    0.417
+   ]
+  }
+ }
 }

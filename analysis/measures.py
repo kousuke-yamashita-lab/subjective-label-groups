@@ -142,3 +142,41 @@ def holm(ps):
     for i, k in enumerate(order):
         run = max(run, min(1, (len(ps) - i) * ps[k])); adj[k] = run
     return adj
+
+
+def within_group_accuracy(D, X, jp, k, rng):
+    """Leave-one-set-out accuracy of a ridge model trained on the consensus of k raters per training image.
+
+    X: {set_id: image features (10 x d)}. The target of the held-out set is the consensus of all raters of the same
+    group on that set; persons who rated the held-out set are excluded from the training raters. k=None uses every
+    available rater. Returns the rank correlation divided by sqrt(reliability of the held-out consensus)."""
+    ps, ts, comps = [], [], []
+    for te in SETS:
+        m_te = D[te]["jp"] == jp
+        Yte = D[te]["mats"]["overall"][m_te]
+        excl = list(set(D[te]["person"][m_te]))
+        Xtr, ytr = [], []
+        for tr in SETS:
+            if tr == te:
+                continue
+            idx = np.where((D[tr]["jp"] == jp) & ~np.isin(D[tr]["person"], excl))[0]
+            if len(idx) == 0:
+                continue
+            pick = idx if k is None else rng.choice(idx, min(k, len(idx)), replace=False)
+            Xtr.append(X[tr]); ytr.append(consensus(D[tr]["mats"]["overall"][pick]))
+        model = RidgeCV(alphas=ALPHAS).fit(np.concatenate(Xtr), np.concatenate(ytr))
+        p = model.predict(X[te]); ps.append(p - p.mean()); ts.append(consensus(Yte))
+        comps.append((*variance_components(Yte), len(Yte)))
+    return stats.spearmanr(np.concatenate(ps), np.concatenate(ts))[0] / np.sqrt(_reliability(comps))
+
+
+def pilot_subset(D, sets, n, rng):
+    """A simulated pilot: the given sets, with n raters per group in each set drawn without replacement."""
+    out = {}
+    for s in sets:
+        keep = np.zeros(len(D[s]["person"]), bool)
+        for jp in (True, False):
+            idx = np.where(D[s]["jp"] == jp)[0]
+            keep[rng.choice(idx, min(n, len(idx)), replace=False)] = True
+        out[s] = {**D[s], "mats": {c: v[keep] for c, v in D[s]["mats"].items()}, "person": D[s]["person"][keep], "jp": D[s]["jp"][keep]}
+    return out

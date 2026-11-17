@@ -21,6 +21,8 @@ where `m` is the set mean, `c_i` the image consensus, `a_r` the rater level, and
 | `H`, `H_res` | Mean correlation over the 15 pairs of six elements, without and with the image consensus removed |
 | `rho*` | Rank correlation of the two groups' consensuses, corrected for reliability |
 | Model fit | Corrected rank correlation between a model trained on separate Japanese ratings and each group's consensus |
+| Accuracy within each group | Corrected rank correlation of a model trained on the consensus of k raters per image, within the same group (leave-one-set-out) |
+| Pilot size | Proportion of simulated small pilots that reach the same decisions as the full data |
 
 The permutation test exchanges group labels between raters with the images and the trained model held fixed, and is Holm-adjusted over the five comparisons that support the claims of the paper. The intervals also resample images, and for the model, the training data, so the two can lead to different conclusions.
 
@@ -28,7 +30,7 @@ The permutation test exchanges group labels between raters with the images and t
 
 The anonymised ratings and model predictions are in `data/`; see [data/README.md](data/README.md).
 
-Image features are not released, so the code uses the released per-image model predictions. The model gap interval cannot be recomputed from the released data and is read from a fixed file. Model training itself cannot be rerun.
+Image features are not released, so the code uses the released per-image model predictions. The model gap interval and the accuracy within each group cannot be recomputed from the released data and are read from a fixed file. Model training itself cannot be rerun.
 
 ```
 pip install -r requirements.txt
