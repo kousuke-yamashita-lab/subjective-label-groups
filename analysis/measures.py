@@ -236,3 +236,16 @@ def matched_draw(D, X, jp, k, rng, cols=("overall",), sets=None, m=3, imgs=None)
             ps.append(P[:, j] - P[:, j].mean()); ts.append(ct)
     with np.errstate(all="ignore"):
         return np.corrcoef(np.concatenate(la), np.concatenate(lb))[0, 1], stats.spearmanr(np.concatenate(ps), np.concatenate(ts))[0]
+
+
+def rater_element_correlation(D):
+    """H of each rater in each set: mean correlation between the six level-removed element ratings over the set's images.
+    Returns {(person, condition): value} with condition "blue" or "general"."""
+    out = {}
+    for s in SETS:
+        X = np.stack([D[s]["mats"][c] for c in ELEMENTS], -1).astype(float)
+        for r, person in enumerate(D[s]["person"]):
+            x = X[r] - X[r].mean(0, keepdims=True)
+            with np.errstate(all="ignore"):
+                out[(person, "blue" if s in BLUE else "general")] = np.nanmean(np.corrcoef(x.T)[np.triu_indices(6, 1)])
+    return out

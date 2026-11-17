@@ -258,6 +258,29 @@ def pilot_section(D, q):
     return L
 
 
+def stability_section(D):
+    """Rank correlation, over raters who answered both conditions, between their H in the blue-shirt and the general set."""
+    h = M.rater_element_correlation(D)
+    jp = {p: bool(D[s]["jp"][i]) for s in S for i, p in enumerate(D[s]["person"])}
+    L = ["", "## Stability of each rater's H across the two conditions", "",
+         "Each rater's H is computed within one set (10 images). Spearman correlation between the blue-shirt and the general value, "
+         "raters who answered both conditions only; interval from 1000 resamplings of raters.", "",
+         "| Group | Raters | Rank correlation [95% interval] | p |", "|---|---|---|---|"]
+    rng = np.random.default_rng(0)
+    for name, flag in (("JP", True), ("VN", False)):
+        ps = sorted(p for p in jp if jp[p] == flag and (p, "blue") in h and (p, "general") in h)
+        a = np.array([h[(p, "blue")] for p in ps]); b = np.array([h[(p, "general")] for p in ps])
+        rho, pv = stats.spearmanr(a, b)
+        bt = []
+        for _ in range(1000):
+            i = rng.integers(0, len(a), len(a))
+            with np.errstate(all="ignore"):
+                bt.append(stats.spearmanr(a[i], b[i])[0])
+        bt = np.array(bt); bt = bt[np.isfinite(bt)]
+        L.append(f"| {name} | {len(ps)} | {rho:+.2f} [{np.percentile(bt, 2.5):+.2f}, {np.percentile(bt, 97.5):+.2f}] | {pv:.3f} |")
+    return L
+
+
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--quick", action="store_true")
     q = ap.parse_args().quick
@@ -382,6 +405,7 @@ def main():
     L += matched_section(D, persons, pid, base, use_features, fixed, q)
     L += within_group_section(D, use_features, fixed, q)
     L += pilot_section(D, q)
+    L += stability_section(D)
     (RES / "summary.md").write_text("\n".join(L) + "\n", encoding="utf-8")
     print("\n".join(L))
 
