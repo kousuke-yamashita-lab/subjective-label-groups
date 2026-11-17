@@ -227,12 +227,12 @@ def pilot_section(D, q):
     L = ["", "## Size of a pilot study", "",
          f"Full data: rho {rj:.3f} / {rv:.3f}, required-rater ratio VN/JP {M.required_raters(rv) / M.required_raters(rj):.1f}. "
          f"Proportion of {n_pilot} simulated pilots that reach the same decision as the full data.", "",
-         "| Pilot | Images | rho_VN < rho_JP | Ratio >= 2 | Median ratio [IQR] | H_VN > H_JP | H_res_VN > H_res_JP | All three directions |",
-         "|---|---|---|---|---|---|---|---|"]
+         "| Pilot | Images | rho_VN < rho_JP | Ratio >= 2 | Median ratio [IQR] | H_VN > H_JP | H_res_VN > H_res_JP | rho_spec_VN < rho_spec_JP | All four directions |",
+         "|---|---|---|---|---|---|---|---|---|"]
     for n_sets in (1, 2, 4, 6):
         for n in (3, 5, 8):
             rng = np.random.default_rng(SEED_EXTRA + 100 * n_sets + n)
-            a = b = c = d = e = 0; ratios = []
+            a = b = c = d = e = g = 0; ratios = []
             for _ in range(n_pilot):
                 if n_sets == 6:
                     sets = S
@@ -245,14 +245,15 @@ def pilot_section(D, q):
                     pj, pv = M.icc(P, sets, True), M.icc(P, sets, False)
                     hj, hv = M.element_correlation(P, sets, True), M.element_correlation(P, sets, False)
                     qj, qv = M.element_correlation(P, sets, True, True), M.element_correlation(P, sets, False, True)
+                    sj, sv = M.element_specific_agreement(P, sets, True), M.element_specific_agreement(P, sets, False)
                 r = M.required_raters(pv) / M.required_raters(pj) if pj > 0 else np.nan
                 ratios.append(r if np.isfinite(r) else 1e9)
                 ok1 = pv < pj; ok2 = ((pv <= 0) or (np.isfinite(r) and r >= 2)) if pj > 0 else False
-                ok3 = hv > hj; ok4 = qv > qj
-                a += ok1; b += ok2; c += ok3; d += ok4; e += (ok1 and ok3 and ok4)
+                ok3 = hv > hj; ok4 = qv > qj; ok5 = sv < sj
+                a += ok1; b += ok2; c += ok3; d += ok4; g += ok5; e += (ok1 and ok3 and ok4 and ok5)
             qq = np.percentile(ratios, [25, 50, 75]); fq = lambda x: ">100" if x > 100 else f"{x:.1f}"
             L.append(f"| {n_sets} set{'s' if n_sets > 1 else ''} x {n} raters per group | {10 * n_sets} | {a / n_pilot:.2f} | {b / n_pilot:.2f} | "
-                     f"{fq(qq[1])} [{fq(qq[0])}, {fq(qq[2])}] | {c / n_pilot:.2f} | {d / n_pilot:.2f} | {e / n_pilot:.2f} |")
+                     f"{fq(qq[1])} [{fq(qq[0])}, {fq(qq[2])}] | {c / n_pilot:.2f} | {d / n_pilot:.2f} | {g / n_pilot:.2f} | {e / n_pilot:.2f} |")
     L += ["", "Raters per set are capped by availability (the smallest set has 6 Japanese and 5 Vietnamese raters)."]
     return L
 
