@@ -113,6 +113,25 @@ def imbalance_checks(D, n_draw=2000, n_per=5, seed=0):
     return drop, np.array(r)
 
 
+def aggregation_variants(D):
+    """rho under other ways of combining the six sets (the paper averages the components before taking the ratio)."""
+    out = {}
+    for jp in (True, False):
+        c = []
+        for s in S:
+            Y = D[s]["mats"]["overall"][D[s]["jp"] == jp]
+            n, k = Y.shape
+            vi, ve = M.variance_components(Y)
+            msi = n * ((Y.mean(0) - Y.mean()) ** 2).sum() / (k - 1)
+            c.append((vi, ve, (msi - ve) / n, (n - 1) * (k - 1)))
+        c = np.array(c); vi, ve, raw, w = c.T
+        out[jp] = {"Paper (negative variance set to 0)": vi.mean() / (vi + ve).mean(),
+                   "Negative variance kept": raw.mean() / (raw + ve).mean(),
+                   "Sets weighted by degrees of freedom": (vi * w).sum() / ((vi + ve) * w).sum(),
+                   "Mean of the per-set rho": np.mean(vi / (vi + ve))}
+    return out
+
+
 SEED_EXTRA = 20261116
 
 
@@ -281,6 +300,45 @@ def stability_section(D):
     return L
 
 
+def image_split_section(D):
+    """Exploratory check of how much each image splits the raters (supplementary; not part of the Holm family)."""
+    within_rank = lambda vs: np.concatenate([stats.rankdata(v) for v in vs])
+
+    def per_group(jp, rows=None):
+        v, c = [], []
+        for s in S:
+            Y = D[s]["mats"]["overall"][D[s]["jp"] == jp]
+            if rows is not None:
+                Y = Y[rows[s]]
+            v.append(M.image_disagreement(Y)); c.append(M.consensus(Y))
+        return v, c
+
+    L = ["", "## Image-level disagreement (exploratory)", "",
+         "Disagreement of an image: variance of the residual after removing rater levels and the image consensus. "
+         "Values are ranked within each set before pooling the 60 images, because the raters differ between sets.", "",
+         "| Group | Split-half rank correlation (mean of 2000) | Corrected to all raters (Spearman-Brown) |", "|---|---|---|"]
+    rng = np.random.default_rng(20261109)
+    for jp, name in ((True, "JP"), (False, "VN")):
+        rs = []
+        for _ in range(2000):
+            A, B = {}, {}
+            for s in S:
+                n = int((D[s]["jp"] == jp).sum()); p = rng.permutation(n); h = n // 2
+                A[s], B[s] = p[:h], p[h:2 * h]
+            if any(len(A[s]) < 2 for s in S):
+                continue
+            rs.append(stats.spearmanr(within_rank(per_group(jp, A)[0]), within_rank(per_group(jp, B)[0]))[0])
+        r = float(np.mean(rs))
+        L.append(f"| {name} | {r:+.2f} | {2 * r / (1 + r):+.2f} |")
+    vj, cj = per_group(True); vv, cv = per_group(False)
+    r, p = stats.spearmanr(within_rank(vj), within_rank(vv))
+    a = stats.spearmanr(within_rank([np.abs(x) for x in cv]), within_rank(vj))[0]
+    b = stats.spearmanr(within_rank([np.abs(x) for x in cj]), within_rank(vv))[0]
+    L += ["", f"- JP vs VN disagreement, rank correlation over 60 images: {r:+.2f} (p = {p:.3f})",
+          f"- Disagreement vs |consensus of the other group|: JP {a:+.2f}, VN {b:+.2f}"]
+    return L
+
+
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--quick", action="store_true")
     q = ap.parse_args().quick
@@ -395,17 +453,26 @@ def main():
         pr = M.fit_transfer_model(f)[0] if use_features else M.load_predictions()[f]
         a, b = M.corrected_fit(D, pr, S, True), M.corrected_fit(D, pr, S, False)
         L.append(f"- {f}: {a:.3f} / {b:.3f}, {a-b:+.3f}")
+    agg = aggregation_variants(D)
+    L += ["", "## Ways of combining the sets", "", "| Method | Japanese | Vietnamese | Difference |", "|---|---|---|---|"]
+    L += [f"| {m} | {agg[True][m]:.3f} | {agg[False][m]:.3f} | {agg[True][m] - agg[False][m]:+.3f} |" for m in agg[True]]
     drop, eq = imbalance_checks(D)
     L += ["", "## Unequal numbers of raters per set", "", "| Condition | Japanese | Vietnamese | Difference |", "|---|---|---|---|"]
     L += [f"| {s} removed | {a:.3f} | {v:.3f} | {a - v:+.3f} |" for s, (a, v) in drop.items()]
     L += [f"| Five raters per set, resampled (mean of {len(eq)}) | {eq[:, 0].mean():.3f} | {eq[:, 1].mean():.3f} | {(eq[:, 0] - eq[:, 1]).mean():+.3f} |",
           "", f"Draws in which the Japanese group is higher: {int((eq[:, 0] > eq[:, 1]).sum())} of {len(eq)}"]
-    L += ["", "## By set", "", "| Set | JP raters | VN raters | rho difference | H difference |", "|---|---|---|---|---|"]
-    L += [f"| {s} | {int(D[s]['jp'].sum())} | {int((~D[s]['jp']).sum())} | {p1(D,[s]):+.2f} | {p2(D,[s]):+.2f} |" for s in S]
+    sd_c = lambda s, jp: np.sqrt(M.variance_components(D[s]["mats"]["overall"][D[s]["jp"] == jp])[0])
+    L += ["", "## By set", "",
+          "sigma_c: square root of the image-consensus variance component (0-100 scale). Score SD: SD of the selection score of the set's images.", "",
+          "| Set | JP raters | VN raters | rho JP | rho VN | rho difference | H difference | Score SD | sigma_c JP | sigma_c VN |",
+          "|---|---|---|---|---|---|---|---|---|---|"]
+    L += [f"| {s} | {int(D[s]['jp'].sum())} | {int((~D[s]['jp']).sum())} | {M.icc(D, [s], True):.2f} | {M.icc(D, [s], False):.2f} | "
+          f"{p1(D,[s]):+.2f} | {p2(D,[s]):+.2f} | {np.std(x[s], ddof=1):.1f} | {sd_c(s, True):.1f} | {sd_c(s, False):.1f} |" for s in S]
     L += matched_section(D, persons, pid, base, use_features, fixed, q)
     L += within_group_section(D, use_features, fixed, q)
     L += pilot_section(D, q)
     L += stability_section(D)
+    L += image_split_section(D)
     (RES / "summary.md").write_text("\n".join(L) + "\n", encoding="utf-8")
     print("\n".join(L))
 

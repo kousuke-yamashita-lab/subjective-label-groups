@@ -66,6 +66,16 @@ def element_correlation(D, sets, jp, remove_image=False):
         return np.corrcoef(np.concatenate(rows).T)[np.triu_indices(6, 1)].mean()
 
 
+def image_disagreement(Y):
+    """Per-image variance of the residual after removing rater levels and the image consensus.
+
+    The (n-1)(k-1) degrees of freedom of the residual are shared equally among the k images.
+    """
+    n, k = Y.shape
+    E = Y - Y.mean(1, keepdims=True) - Y.mean(0, keepdims=True) + Y.mean()
+    return (E ** 2).sum(0) / ((n - 1) * (k - 1) / k)
+
+
 def consensus(Y):
     """Image consensus: remove each rater's level, average over raters, centre within the set."""
     v = (Y - Y.mean(1, keepdims=True)).mean(0)
